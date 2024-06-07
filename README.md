@@ -1,8 +1,13 @@
 # handscape_frontend
 
-## Project setup
+### Dependencies
+
 ```
-npm install
+vue3
+```
+
+```
+vue-router
 ```
 
 ### Compiles and hot-reloads for development
@@ -20,5 +25,3 @@ npm run build
 npm run lint
 ```
 
-### Customize configuration
-See [Configuration Reference](https://cli.vuejs.org/config/).
