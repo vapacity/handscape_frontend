@@ -2,7 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router';
 import HomePage from '../views/HomePage.vue';
 import LearnPage from '../views/LearnPage.vue';
 import ExamPage from '../views/ExamPage.vue';
-import CreatePage from '../views/CreatePage.vue';
+import CreatePage1 from '../views/CreatePage1.vue';
+import CreatePage2 from '../views/CreatePage2.vue';
 
 const routes = [
   {
@@ -22,8 +23,13 @@ const routes = [
   },
   {
     path: '/create',
-    name: 'CreatePage',
-    component: CreatePage,
+    name: 'CreatePage1',
+    component: CreatePage1,
+  },
+  {
+    path: '/create',
+    name: 'CreatePage2',
+    component: CreatePage2,
   },
 ];
 
