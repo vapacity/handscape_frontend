@@ -39,7 +39,9 @@
           <div class="image-upload">
             <!-- 摄像头 -->
             <div class="video-container" v-if="isCapturing">
-              <video ref="video" autoplay class="video"></video>
+              <video ref="video" autoplay class="video" style="display: none;"></video>
+              <canvas ref="canvas" class="video-canvas" style="display: none;"></canvas>
+              <img v-if="processedImage" :src="'data:image/png;base64,' + processedImage" class="processed-video-frame"> <!-- 显示处理后的图像 -->
             </div>
           </div>
           <div class="button-image" @click="nextStep">
@@ -76,7 +78,7 @@
 </template>
 
 <script>
-import axios from 'axios';
+import io from 'socket.io-client';
 
 export default {
   name: "CreatePage1",
@@ -86,10 +88,20 @@ export default {
       gestureName: '',
       countryName: '', // 国家名称
       gestureDes: '', // 手势描述
-      gestures: [], // 保存所有手势
+      current_gesture: null, // 保存当前
       videoStream: null,
       isCapturing: false, // 用于控制摄像头状态
-      successMessage: '' // 成功消息
+      successMessage: '', // 成功消息
+      processedImage:null,
+      gestureMap: {
+        0: '🤘',
+        1: '👍',
+        2: '✌',
+        3: '👌',
+        4: '🤙',
+        5: '🤌'
+      },
+      gestureLabel: -1
     };
   },
   watch: {
@@ -113,6 +125,8 @@ export default {
     },
     nextStep() {
       this.currentStep += 1;
+      this.stopSendingFrames();
+      this.stopVideo();
     },
     async startVideo() {
       try {
@@ -134,34 +148,114 @@ export default {
       this.isCapturing = !this.isCapturing;
       if (this.isCapturing) {
         this.startVideo();
+        this.startSendingFrames();
       } else {
         this.stopVideo();
+        this.stopSendingFrames() 
       }
     },
     addGesture() {
       // 将国家名称和描述添加到手势信息
-      this.gestures.push({
-        countryName: this.countryName,
-        gestureDes: this.gestureDes
-      });
-      // 清空输入框
-      this.countryName = '';
-      this.gestureDes = '';
+      this.current_gesture={
+        'gestureName' : this.gestureName,
+        'countryName': this.countryName,
+        'gestureDes': this.gestureDes
+      };
+      console.log("addGesture",this.current_gesture)
+      
+    },
+    sendGestureInf(){
+      const data = this.current_gesture;
+      try {
+          // 记录发送请求时间
+          this.startTime = performance.now();
+          this.startSendingFrames();
+          this.socket.emit('train_and_get_meaning', { meaning: data });
+          console.log("sending data:",data);
+          console.log('Meaning data sent');
+          // 清空输入框
+          this.gestureName = '';
+          this.countryName = '';
+          this.gestureDes = '';
+        } catch (error) {
+          console.error('Error sending meaning data:', error);
+        }
     },
     finishCreation() {
-      const data = this.gestureDes;
-      this.sendDataToBackend(data);
+      this.addGesture();
+      this.sendGestureInf();
       this.successMessage = 'Successful! Now you can try your gestures.';
     },
-    sendDataToBackend(data) {
-      // 使用Axios库发送POST请求将数据传递给后端API
-      axios.post('#', data) // 需要替换为实际后端地址
-        .then(response => {
-          console.log('Response from backend:', response.data);
-        })
-        .catch(error => {
-          console.error('Error sending data to backend:', error);
-        });
+    startSendingFrames() {
+      this.socket = io('http://127.0.0.1:8000'); // 替换为你的后端地址
+      this.socket.on('connect', () => {
+        console.log('WebSocket connected');
+      });
+      this.socket.on('connect_error', (error) => {
+        console.error('WebSocket connection error:', error);
+      });
+      this.socket.on('disconnect', () => {
+        console.log('WebSocket disconnected');
+      });
+      this.socket.on('response_back', (data) => {
+        try {
+          const parsedData = JSON.parse(data);
+          this.gesture = parsedData.gesture;
+          this.processedImage = parsedData.image;
+          if (this.gesture !== -1) {
+            this.gesture = this.gestureMap[this.gesture];
+            if (!this.randomOnce) {
+              this.checkAnswer(this.gesture);
+            }
+          }
+          console.log('手势标签:', this.gesture);
+          // 记录接收响应时间
+          const endTime = performance.now();
+          const totalTime = endTime - this.startTime;
+          console.log(`处理一帧图像的总时间: ${totalTime.toFixed(2)} 毫秒`);
+        } catch (error) {
+          console.error('Error processing response data:', error);
+        }
+      });
+
+      this.frameInterval = setInterval(() => {
+        this.captureFrame();
+      }, 100); // 每100ms捕获一次帧
+    },
+    stopSendingFrames() {
+      clearInterval(this.frameInterval);
+      if (this.socket) {
+        this.socket.disconnect();
+      }
+    },
+    captureFrame() {
+      if (this.$refs.video && this.$refs.canvas) {
+        const video = this.$refs.video;
+        const canvas = this.$refs.canvas;
+        const context = canvas.getContext('2d');
+
+        // 设置画布大小为视频大小
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        // 清空画布
+        context.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 绘制视频帧到画布
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // 将画布内容转换为图像数据
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.5);  // 使用JPEG格式和质量参数
+
+        try {
+          // 记录发送请求时间
+          this.startTime = performance.now();
+          this.socket.emit('record', { image: dataUrl });
+          console.log('Frame data sent');
+        } catch (error) {
+          console.error('Error sending frame data:', error);
+        }
+      }
     }
   },
   beforeUnmount() {
@@ -335,9 +429,9 @@ input[type="file"] {
   left: 16%;
   width: 68%;
   height: 80%;
-  background: rgba(0, 0, 0);
+  background: rgba(0, 0, 0, 0.8);
   border: 2px solid #000;
-  border-radius: 2px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -346,10 +440,20 @@ input[type="file"] {
 .video {
   width: 100%;
   height: 100%;
+  object-fit: cover; /* 确保视频填满容器 */
   border-radius: 8px;
   z-index: 0;
 }
 
+.processed-video-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: contain; /* 确保等比例缩放并填满容器 */
+  border-radius: 8px;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
 .container {
   display: flex;
   height: 30vh;

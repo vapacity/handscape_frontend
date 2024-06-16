@@ -12,7 +12,9 @@
           <div class="image-upload">
             <!-- 摄像头 -->
             <div class="video-container">
-              <video ref="video" autoplay class="video"></video>
+              <video ref="video" autoplay class="video" style="display:none"></video>
+              <canvas ref="canvas" class="video-canvas" style="display:none"></canvas>
+              <img v-if="processedImage" :src="'data:image/png;base64,' + processedImage" class="processed-video-frame"> <!-- 显示处理后的图像 -->
             </div>
           </div>
         </div>
@@ -41,24 +43,47 @@
 </template>
 
 <script>
+import io from 'socket.io-client';
+
 export default {
   name: "CreatePage2",
   data() {
     return {
-      gesture: {
-        // 这是一个示例，运行时将gesture置空
-        id: 1,
-        emojiImage: require("../assets/rock.png"),
-        images: [
-          require("../assets/11.png"),
-          require("../assets/12.png"),
-        ],
-        currentIndex: 0,
-      }
+      //questions: questions,
+      currentQuestion: null,
+      userAnswer: '',
+      feedback: '',
+      videoStream: null,
+      processedImage: null,
+      socket: null,
+      sendInterval: null,
+      randomOnce: false,
+      feedbackTimer: null, // 新增反馈计时器
+      gestureMap: {
+        0: '🤘',
+        1: '👍',
+        2: '✌',
+        3: '👌',
+        4: '🤙',
+        5: '🤌'
+      },
+      gestureLabel: -1,
+      //videoStream: null,
+      //processedImage: null,
+      //socket: null,
+      frameInterval: null,
+      //randomOnce: false,
+      gesture: null,
+      gestures: [], // 确保gestures已定义
+      
     };
   },
   mounted() {
-    this.captureGesture();
+    this.startVideo();
+  },
+  beforeUnmount() {
+    this.stopSendingFrames();
+    this.stopVideo();
   },
   methods: {
     goBack() {
@@ -83,41 +108,79 @@ export default {
     tryGesture() {
       this.$router.push({ name: 'CreatePage2' });
     },
-    captureGesture() {
-      const video = this.$refs.video;
-      navigator.mediaDevices.getUserMedia({
-        video: true
-      })
-        .then(stream => {
-          video.srcObject = stream;
-        })
-        .catch(error => {
-          console.error('Error accessing camera:', error);
-        });
-
-      video.addEventListener('play', () => {
-        setInterval(() => {
-          // 获取视频帧数据，发送到后端进行识别
-          const canvas = document.createElement('canvas');
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const imageData = canvas.toDataURL('image/jpeg');
-
-          // 模拟后端返回的手势识别结果
-          const result = {
-            id: this.gesture.id,
-            emoji: this.gesture.emoji,
-            images: this.gesture.images,
-            currentIndex: this.gesture.currentIndex,
-            image: imageData,
-          };
-          // 将识别结果添加到gesture中
-          this.gesture = result;
-        }, 1000); // 每秒捕获一次手势
-      });
+    async startVideo() {
+      try {
+        this.videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        this.$refs.video.srcObject = this.videoStream;
+        this.startSendingFrames();
+      } catch (error) {
+        console.error('Error accessing webcam:', error);
+      }
     },
+    stopVideo() {
+      if (this.videoStream) {
+        this.videoStream.getTracks().forEach(track => track.stop());
+        this.videoStream = null;
+      }
+    },
+    startSendingFrames() {
+      this.socket = io('http://127.0.0.1:8000'); // 替换为你的后端地址
+      this.socket.on('connect', () => {
+        console.log('WebSocket connected');
+      });
+      this.socket.on('connect_error', (error) => {
+        console.error('WebSocket connection error:', error);
+      });
+      this.socket.on('disconnect', () => {
+        console.log('WebSocket disconnected');
+      });
+      this.socket.on('response_back', (data) => {
+        try {
+          const parsedData = JSON.parse(data);
+          this.processedImage = parsedData.image;
+          //this.gesture = parsedData.gesture;
+        } catch (error) {
+          console.error('Error processing response data:', error);
+        }
+      });
+
+      this.frameInterval = setInterval(() => {
+        this.captureFrame();
+      }, 80); // 每80ms捕获一次帧
+    },
+    stopSendingFrames() {
+      clearInterval(this.frameInterval);
+      if (this.socket) {
+        this.socket.disconnect();
+      }
+    },
+    captureFrame() {
+      if (this.$refs.video && this.$refs.canvas) {
+        const video = this.$refs.video;
+        const canvas = this.$refs.canvas;
+        const context = canvas.getContext('2d');
+
+        // 设置画布大小为视频大小
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        // 清空画布
+        context.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 绘制视频帧到画布
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // 将画布内容转换为图像数据
+        const dataUrl = canvas.toDataURL('image/png');
+
+        try {
+          this.socket.emit('try', { image: dataUrl });
+          console.log('Frame data sent');
+        } catch (error) {
+          console.error('Error sending frame data:', error);
+        }
+      }
+    }
   }
 };
 </script>
@@ -125,7 +188,7 @@ export default {
 <style scoped>
 .create-container {
   text-align: center;
-  background: linear-gradient(to bottom,rgb(15,178,193), rgb(163,101,182));
+  background: linear-gradient(to bottom, rgb(15, 178, 193), rgb(163, 101, 182));
   color: black;
   font-family: Arial, sans-serif;
   height: 100%;
@@ -139,7 +202,6 @@ h1 {
   margin-bottom: 20px;
 }
 
-
 .buttons {
   margin-bottom: 20px;
   display: flex;
@@ -149,7 +211,7 @@ h1 {
 .buttons button {
   background-color: transparent;
   color: black;
-  border:none;
+  border: none;
   border-radius: 30px;
   padding: 10px 20px;
   margin: 5px;
@@ -161,7 +223,6 @@ h1 {
   background-color: black;
   color: white;
 }
-
 
 .back-button {
   width: 50px;
@@ -244,6 +305,15 @@ input[type="file"] {
   border-radius: 8px;
   z-index: 0;
 }
+.processed-video-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: contain; /* 确保等比例缩放并填满容器 */
+  border-radius: 8px;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
 
 .container {
   display: flex;
@@ -321,7 +391,6 @@ input[type="file"] {
   padding: 5px 0;
 }
 
-
 button:hover {
   background-color: transparent;
   color: white;
@@ -381,11 +450,12 @@ button:hover {
   align-items: center;
   margin-top: 5px;
 }
+
 .cube img {
-  width: 50%; /* 图片的宽度设置为父元素宽度的50% */
-  max-width: 100px; /* 最大宽度 */
-  height: auto; /* 保持高度自动，以保持宽高比 */
-  display: block; /* 使图片为块级元素 */
-  margin: 20vh auto; /* 居中对齐 */
+  width: 50%;
+  max-width: 100px;
+  height: auto;
+  display: block;
+  margin: 20vh auto;
 }
 </style>
